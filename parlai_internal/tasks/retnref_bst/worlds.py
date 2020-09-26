@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
-
+"""
+Interactive world for Retrieve&Refine with knowledge retriever and Blended skill talk.
+"""
 from copy import deepcopy
+import typing as tp
+from parlai.core.opt import Opt
 from parlai.core.params import ParlaiParser
 from parlai.core.message import Message
 from parlai.core.worlds import validate
@@ -10,8 +14,15 @@ from projects.wizard_of_wikipedia.knowledge_retriever.knowledge_retriever import
 
 
 class InteractiveWorld(InteractiveBaseWorld):
+    """
+    InteractiveWorld combined with Blended skill talk InteractiveWorld
+    and WoW knowledge retrieval InteractiveWorld.
+    """
     @staticmethod
-    def add_cmdline_args(argparser):
+    def add_cmdline_args(argparser: ParlaiParser) -> None:
+        """
+        Add command-line arguments specifically for this task world.
+        """
         InteractiveBaseWorld.add_cmdline_args(argparser)
         parser = argparser.add_argument_group('RetNRef Interactive World Args')
         parser.add_argument(
@@ -27,12 +38,16 @@ class InteractiveWorld(InteractiveBaseWorld):
             help='Add knowledge token to retrieved knowledge',
         )
 
-    def __init__(self, opt, agents, shared=None):
+    def __init__(self, opt: Opt, agents: tp.List[tp.Any], shared=None) -> None:
         super().__init__(opt, agents, shared)
         self._set_up_knowledge_agent(opt.get('add_token_knowledge', False))
         self.print_checked_sentence = opt['print_checked_sentence']
 
-    def _set_up_knowledge_agent(self, add_token_knowledge=False):
+    def _set_up_knowledge_agent(self,
+                                add_token_knowledge: bool = False) -> None:
+        """
+        Set up knowledge agent for knowledge retrieval generated from WoW project.
+        """
         parser = ParlaiParser(False, False)
         KnowledgeRetrieverAgent.add_cmdline_args(parser)
         parser.set_params(
@@ -42,7 +57,13 @@ class InteractiveWorld(InteractiveBaseWorld):
         knowledge_opt = parser.parse_args([])
         self.knowledge_agent = KnowledgeRetrieverAgent(knowledge_opt)
 
-    def _add_knowledge_to_act(self, act):
+    def _add_knowledge_to_act(self, act: Message) -> Message:
+        """
+        After human agent act, if use_knowledge is True, add knowledge to act.
+        Knowledge agent first observes human agent's act, then acts itself.
+        Key 'knowledge' represents full knowledge consisting of multi knowledge sentences.
+        Key 'checked_sentence' represents gold result among full knowledge.
+        """
         if self.opt.get('use_knowledge', False):
             self.knowledge_agent.observe(act, actor_id='apprentice')
             knowledge_act = self.knowledge_agent.act()
@@ -54,7 +75,7 @@ class InteractiveWorld(InteractiveBaseWorld):
             act['title'] = knowledge_act['title']
         return act
 
-    def parley(self):
+    def parley(self) -> None:
         # random initialize human and model persona
         if self.turn_cnt == 0:
             self.p1, self.p2 = self.get_contexts()
