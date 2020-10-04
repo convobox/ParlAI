@@ -109,7 +109,8 @@ class InteractiveWorld(InteractiveBaseWorld):
             self.agents[1].observe(validate(context_act))
 
         # add knowledge to the model observation
-        act = self._add_knowledge_to_act(act)
+        if 'text' in act:
+            act = self._add_knowledge_to_act(act)
 
         # model observe human act and knowledge
         self.agents[1].observe(validate(act))
@@ -117,7 +118,8 @@ class InteractiveWorld(InteractiveBaseWorld):
         self.acts[1] = self.agents[1].act()
 
         # add the mdoel reply to the knowledge retriever's dialogue history
-        self.knowledge_agent.observe(validate(self.acts[1]))
+        if 'text' in self.acts[1]:
+            self.knowledge_agent.observe(validate(self.acts[1]))
 
         # human agent observes model act
         self.agents[0].observe(validate(self.acts[1]))
@@ -127,3 +129,51 @@ class InteractiveWorld(InteractiveBaseWorld):
         if act['episode_done']:
             self.finalize_episode()
             self.turn_cnt = 0
+
+
+class DefaultWorld(InteractiveWorld):
+    """
+    InteractiveWorld combined with Blended skill talk InteractiveWorld
+    and WoW knowledge retrieval InteractiveWorld.
+    """
+    @staticmethod
+    def add_cmdline_args(argparser: ParlaiParser) -> None:
+        """
+        Add command-line arguments specifically for this task world.
+        """
+        InteractiveBaseWorld.add_cmdline_args(argparser)
+        parser = argparser.add_argument_group('RetNRef Interactive World Args')
+        parser.add_argument(
+            '--print-checked-sentence',
+            type='bool',
+            default=False,
+            help='Print sentence that the model checks.',
+        )
+        parser.add_argument(
+            '--add-token-knowledge',
+            type='bool',
+            default=False,
+            help='Add knowledge token to retrieved knowledge',
+        )
+
+    def parley(self) -> None:
+        # teacher agent act first
+        act_0 = deepcopy(self.agents[0].act())
+        self.acts[0] = act_0
+        # add knowledge to the model observation
+        if 'text' in act_0:
+            act_0 = self._add_knowledge_to_act(act_0)
+
+        # model observe human act and knowledge
+        self.agents[1].observe(validate(act_0))
+        # model agent act
+        act_1 = deepcopy(self.agents[1].act())
+        self.acts[1] = act_1
+
+        # add the mdoel reply to the knowledge retriever's dialogue history
+        if 'text' in act_1:
+            self.knowledge_agent.observe(validate(act_1))
+
+        # teacher agent observes model act
+        self.agents[0].observe(validate(act_1))
+        self.update_counters()
