@@ -40,11 +40,13 @@ class InteractiveWorld(InteractiveBaseWorld):
 
     def __init__(self, opt: Opt, agents: tp.List[tp.Any], shared=None) -> None:
         super().__init__(opt, agents, shared)
-        self._set_up_knowledge_agent(opt.get('add_token_knowledge', False))
+        self._set_up_knowledge_agent(opt.get('add_token_knowledge', False),
+                                     shared=shared)
         self.print_checked_sentence = opt['print_checked_sentence']
 
     def _set_up_knowledge_agent(self,
-                                add_token_knowledge: bool = False) -> None:
+                                add_token_knowledge: bool = False,
+                                shared=None) -> None:
         """
         Set up knowledge agent for knowledge retrieval generated from WoW project.
         """
@@ -55,7 +57,11 @@ class InteractiveWorld(InteractiveBaseWorld):
             add_token_knowledge=add_token_knowledge,
         )
         knowledge_opt = parser.parse_args([])
-        self.knowledge_agent = KnowledgeRetrieverAgent(knowledge_opt)
+        if shared:
+            self.knowledge_agent = KnowledgeRetrieverAgent(
+                knowledge_opt, shared.get('knowledge_retriever', None))
+        else:
+            self.knowledge_agent = KnowledgeRetrieverAgent(knowledge_opt)
 
     def _add_knowledge_to_act(self, act: Message) -> Message:
         """
@@ -129,6 +135,14 @@ class InteractiveWorld(InteractiveBaseWorld):
         if act['episode_done']:
             self.finalize_episode()
             self.turn_cnt = 0
+
+    def share(self) -> tp.Dict[str, tp.Any]:
+        """
+        share knowledge retriever model.
+        """
+        shared = super().share()
+        shared['knowledge_retriever'] = self.knowledge_agent.share()
+        return shared
 
 
 class DefaultWorld(InteractiveWorld):
