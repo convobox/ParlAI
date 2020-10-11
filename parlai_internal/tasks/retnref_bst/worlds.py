@@ -55,6 +55,7 @@ class InteractiveWorld(InteractiveBaseWorld):
         parser.set_params(
             model='projects:wizard_of_wikipedia:knowledge_retriever',
             add_token_knowledge=add_token_knowledge,
+            eval_candidates='fixed',
         )
         knowledge_opt = parser.parse_args([])
         if shared:
