@@ -4,6 +4,7 @@ Interactive world for Retrieve&Refine with knowledge retriever and Blended skill
 """
 from copy import deepcopy
 import typing as tp
+from parlai.utils.misc import warn_once
 from parlai.core.opt import Opt
 from parlai.core.params import ParlaiParser
 from parlai.core.message import Message
@@ -11,7 +12,6 @@ from parlai.core.worlds import validate
 from parlai.tasks.blended_skill_talk.worlds import InteractiveWorld as InteractiveBaseWorld
 from projects.wizard_of_wikipedia.knowledge_retriever.knowledge_retriever import (
     KnowledgeRetrieverAgent, )
-
 
 class InteractiveWorld(InteractiveBaseWorld):
     """
@@ -55,7 +55,6 @@ class InteractiveWorld(InteractiveBaseWorld):
         parser.set_params(
             model='projects:wizard_of_wikipedia:knowledge_retriever',
             add_token_knowledge=add_token_knowledge,
-            eval_candidates='fixed',
         )
         knowledge_opt = parser.parse_args([])
         if shared:
@@ -72,8 +71,13 @@ class InteractiveWorld(InteractiveBaseWorld):
         Key 'checked_sentence' represents gold result among full knowledge.
         """
         if self.opt.get('use_knowledge', False):
-            self.knowledge_agent.observe(act, actor_id='apprentice')
-            knowledge_act = self.knowledge_agent.act()
+            try:
+                self.knowledge_agent.observe(act, actor_id='apprentice')
+                knowledge_act = self.knowledge_agent.act()
+            except ValueError:
+                warn_once(
+                    "Knowledge Retrieval Failed Once")
+                return act
             act['knowledge'] = knowledge_act['text']
             act['checked_sentence'] = knowledge_act['checked_sentence']
             if self.print_checked_sentence:
