@@ -40,9 +40,6 @@ class RetnrefAgent(TransformerGeneratorAgent):
             'label, i.e. the chosen sentence',
         )
 
-
-
-
     def observe(self, observation: Message) -> Message:
         """
         Before general observe, if use_knowledge and add knowledge to history,
