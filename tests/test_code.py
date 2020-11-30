@@ -22,8 +22,13 @@ class TestInit(unittest.TestCase):
 
     def test_init_everywhere(self):
         for folder_path in testing_utils.git_ls_dirs('parlai'):
-            excluded_folders = ['mturk', 'task_config', 'webapp']
+            excluded_folders = ['conf', 'mturk', 'task_config', 'webapp']
+            # conf: contains YAML files for Hydra
+            # task_config: contains JSONs, HTML files, etc. for MTurk/Mephisto tasks
             if any(folder_name in folder_path for folder_name in excluded_folders):
+                continue
+            if folder_path.endswith("test") and folder_path.startswith("parlai/tasks/"):
+                # yml regression files in parlai/tasks/X/test/
                 continue
             self.assertIn(
                 '__init__.py',
