@@ -802,6 +802,12 @@ class TorchAgent(ABC, Agent):
             d.add_additional_special_tokens(self.special_toks)
 
         if self.opt.get('person_tokens'):
+            # try to keep dict length unchanged
+            for token in ['__fp16_pad_0__', '__fp16_pad_1__']:
+                if token in d:
+                    del d.freq[token]
+                    idx = d.tok2ind.pop(token)
+                    del d.ind2tok[idx]
             d[self.P1_TOKEN] = 999_999_999
             d[self.P2_TOKEN] = 999_999_998
         return d
