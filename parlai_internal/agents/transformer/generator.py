@@ -10,6 +10,11 @@ from parlai.core.opt import Opt
 from parlai.core.torch_agent import Batch
 from parlai.utils.torch import neginf
 
+# macheng TODO: bad, only used for experimenting new features, need to clean up later,
+# probably better to move to model.py for initilization, and control the loading with config file
+RERANK_WITH_NLI = True
+if RERANK_WITH_NLI:
+    from python.model.reranking_model import NLI_roberta_large_mnli
 
 class GeneratorAgent(TransformerGeneratorAgent):
     @staticmethod
@@ -44,6 +49,12 @@ class GeneratorAgent(TransformerGeneratorAgent):
             raise ValueError(
                 'Response seperator empty while response number over 1.')
         super().__init__(opt, shared)
+        self._init_reranking_models()
+
+    def _init_reranking_models(self) -> None:
+        self._reranking_models = {}
+        if RERANK_WITH_NLI:
+            self._reranking_models['nli'] = NLI_roberta_large_mnli()
 
     def build_dictionary(self):
         """
@@ -219,7 +230,7 @@ class GeneratorAgent(TransformerGeneratorAgent):
                 pred = torch.cat(pred_list)
                 score = n_best_list[0][1]
                 beam_preds_scores.append((pred, score))
-        return beam_preds_scores, beams
+        return beam_preds_scores, beams, n_best_beam_preds_scores
 
     def _v2t(self, vec):
         """
@@ -232,3 +243,36 @@ class GeneratorAgent(TransformerGeneratorAgent):
             if i != self.END_IDX and i != self.START_IDX:
                 new_vec.append(i)
         return self.dict.vec2txt(new_vec)
+
+    def _t2v(self, text: str) -> torch.LongTensor:
+        """
+        Convert str to tokens
+        """
+        return self.dict.txt2vec(text)
+
+    def _rerank_beams(self,
+                          batch: Batch,
+                          n_best_beam_preds_scores: tp.List[tp.List[tp.Tuple[torch.Tensor, torch.Tensor]]]
+                          ) -> tp.List[tp.List[tp.Tuple[torch.Tensor, torch.Tensor]]]:
+        # macheng TODO: need several optimization here,
+        # (1) _rerank_beams have been called twice, in eval_step and _generate respectively
+        # (2) unnecessarily tokenize back and forth
+        assert len(n_best_beam_preds_scores) == 1
+        reranked_preds_scores = [[(pred, score / len(pred)) for pred, score in n_best_beam_preds_scores[0]]]
+
+        dialog_history = batch['observations'][0]['text'].split("\n")
+        responses_scores = [(self._v2t(token), score) for token, score in reranked_preds_scores[0]]
+        if hasattr(self, '_reranking_models'):
+            for model_name, model in self._reranking_models.items():
+                print(f'scores before reranking with {model_name}:')
+                from pprint import pprint
+                pprint(responses_scores)
+                reranked_responses_scores = model.rerank(dialog_history, responses_scores)
+                print(f'after reranking with {model_name}:')
+                pprint(reranked_responses_scores)
+        # convert text response back to tokens, this step could be avoided
+        reranked_responses_scores = [(torch.LongTensor(self._t2v(response)), score)
+                                     for response, score in reranked_responses_scores]
+        reranked_responses_scores = [sorted(reranked_responses_scores, key=lambda x: x[-1],
+                                            reverse=True)]
+        return reranked_responses_scores
