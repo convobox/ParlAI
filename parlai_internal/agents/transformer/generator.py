@@ -7,14 +7,10 @@ import torch.nn.functional as F
 from parlai.agents.transformer.transformer import TransformerGeneratorAgent
 from parlai.core.params import ParlaiParser
 from parlai.core.opt import Opt
-from parlai.core.torch_agent import Batch
+from parlai.core.torch_agent import Batch, Output
 from parlai.utils.torch import neginf
+from python.model.reranking_model import NLI_roberta_large_mnli
 
-# macheng TODO: bad, only used for experimenting new features, need to clean up later,
-# probably better to move to model.py for initilization, and control the loading with config file
-RERANK_WITH_NLI = True
-if RERANK_WITH_NLI:
-    from python.model.reranking_model import NLI_roberta_large_mnli
 
 class GeneratorAgent(TransformerGeneratorAgent):
     @staticmethod
@@ -45,6 +41,7 @@ class GeneratorAgent(TransformerGeneratorAgent):
         ]
         self._response_seperator = opt.get('response_sep', '')
         self._response_num = opt.get('response_num', 1)
+        self._deactivate_nli_reranking = opt.get('deactivate_nli_reranking', False)
         if self._response_num > 1 and len(self._response_seperator) == 0:
             raise ValueError(
                 'Response seperator empty while response number over 1.')
@@ -53,7 +50,7 @@ class GeneratorAgent(TransformerGeneratorAgent):
 
     def _init_reranking_models(self) -> None:
         self._reranking_models = {}
-        if RERANK_WITH_NLI:
+        if not self._deactivate_nli_reranking:
             self._reranking_models['nli'] = NLI_roberta_large_mnli()
 
     def build_dictionary(self):
@@ -250,6 +247,82 @@ class GeneratorAgent(TransformerGeneratorAgent):
         """
         return self.dict.txt2vec(text)
 
+    def eval_step(self, batch):
+        """
+        Evaluate a single batch of examples.
+        """
+        if batch.text_vec is None and batch.image is None:
+            return
+        if batch.text_vec is not None:
+            bsz = batch.text_vec.size(0)
+        else:
+            bsz = len(batch.image)
+        self.model.eval()
+        cand_scores = None
+        token_losses = None
+
+        if batch.label_vec is not None:
+            # calculate loss on targets with teacher forcing
+            loss, model_output = self.compute_loss(batch, return_output=True)
+            if self.output_token_losses:
+                token_losses = self._construct_token_losses(
+                    batch.label_vec, model_output
+                )
+
+        preds = None
+        if self.skip_generation:
+            warn_once("--skip-generation true produces limited metrics")
+        else:
+            maxlen = self.label_truncate or 256
+            beam_preds_scores, beams, tokens_scores = self._generate(batch, self.beam_size, maxlen)
+            preds, scores = zip(*beam_preds_scores)
+            self._add_generation_metrics(batch, preds)
+
+            # bsz x beamsize
+            beam_texts: List[List[Tuple[str, float]]] = []
+            for beam in beams:
+                beam_texts.append([])
+                for tokens, score in tokens_scores[0]:
+                    try:
+                        beam_texts[-1].append((self._v2t(tokens), score.item()))
+                    except KeyError:
+                        logging.error("Decoding error: %s", tokens)
+                        continue
+
+        cand_choices = None
+        # TODO: abstract out the scoring here
+        if self.rank_candidates:
+            # compute roughly ppl to rank candidates
+            cand_choices = []
+            encoder_states = self.model.encoder(*self._encoder_input(batch))
+            for i in range(bsz):
+                num_cands = len(batch.candidate_vecs[i])
+                enc = self.model.reorder_encoder_states(encoder_states, [i] * num_cands)
+                cands, _ = self._pad_tensor(batch.candidate_vecs[i])
+                scores, _ = self.model.decode_forced(enc, cands)
+                cand_losses = F.cross_entropy(
+                    scores.view(num_cands * cands.size(1), -1),
+                    cands.view(-1),
+                    reduction='none',
+                ).view(num_cands, cands.size(1))
+                # now cand_losses is cands x seqlen size, but we still need to
+                # check padding and such
+                mask = (cands != self.NULL_IDX).float()
+                cand_scores = (cand_losses * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-9)
+                _, ordering = cand_scores.sort()
+                cand_choices.append([batch.candidates[i][o] for o in ordering])
+
+        text = [self._v2t(p) for p in preds] if preds is not None else None
+        if text and self.compute_tokenized_bleu:
+            # compute additional bleu scores
+            self._compute_fairseq_bleu(batch, preds)
+            self._compute_nltk_bleu(batch, text)
+        retval = Output(text, cand_choices, token_losses=token_losses)
+        if not self.skip_generation:
+            retval.beam_texts = beam_texts
+        return retval
+
+
     def _rerank_beams(self,
                           batch: Batch,
                           n_best_beam_preds_scores: tp.List[tp.List[tp.Tuple[torch.Tensor, torch.Tensor]]]
@@ -262,7 +335,7 @@ class GeneratorAgent(TransformerGeneratorAgent):
 
         dialog_history = batch['observations'][0]['text'].split("\n")
         responses_scores = [(self._v2t(token), score) for token, score in reranked_preds_scores[0]]
-        if hasattr(self, '_reranking_models'):
+        if len(self._reranking_models) >= 1:
             for model_name, model in self._reranking_models.items():
                 print(f'scores before reranking with {model_name}:')
                 from pprint import pprint
@@ -270,9 +343,10 @@ class GeneratorAgent(TransformerGeneratorAgent):
                 reranked_responses_scores = model.rerank(dialog_history, responses_scores)
                 print(f'after reranking with {model_name}:')
                 pprint(reranked_responses_scores)
-        # convert text response back to tokens, this step could be avoided
-        reranked_responses_scores = [(torch.LongTensor(self._t2v(response)), score)
-                                     for response, score in reranked_responses_scores]
-        reranked_responses_scores = [sorted(reranked_responses_scores, key=lambda x: x[-1],
-                                            reverse=True)]
-        return reranked_responses_scores
+            # convert text response back to tokens, this step could be avoided
+            reranked_responses_scores = [(torch.LongTensor(self._t2v(response)), score)
+                                         for response, score in reranked_responses_scores]
+            reranked_responses_scores = [sorted(reranked_responses_scores, key=lambda x: x[-1],
+                                                reverse=True)]
+            return reranked_responses_scores
+        return reranked_preds_scores

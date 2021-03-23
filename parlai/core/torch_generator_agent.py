@@ -891,7 +891,7 @@ class TorchGeneratorAgent(TorchAgent, ABC):
             warn_once("--skip-generation true produces limited metrics")
         else:
             maxlen = self.label_truncate or 256
-            beam_preds_scores, beams, tokens_scores = self._generate(batch, self.beam_size, maxlen)
+            beam_preds_scores, beams = self._generate(batch, self.beam_size, maxlen)
             preds, scores = zip(*beam_preds_scores)
             self._add_generation_metrics(batch, preds)
 
@@ -899,7 +899,7 @@ class TorchGeneratorAgent(TorchAgent, ABC):
             beam_texts: List[List[Tuple[str, float]]] = []
             for beam in beams:
                 beam_texts.append([])
-                for tokens, score in tokens_scores[0]:
+                for tokens, score in beam.get_rescored_finished():
                     try:
                         beam_texts[-1].append((self._v2t(tokens), score.item()))
                     except KeyError:
