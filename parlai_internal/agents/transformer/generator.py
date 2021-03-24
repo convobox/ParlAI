@@ -9,7 +9,7 @@ from parlai.core.params import ParlaiParser
 from parlai.core.opt import Opt
 from parlai.core.torch_agent import Batch, Output
 from parlai.utils.torch import neginf
-from python.model.reranking_model import NLI_roberta_large_mnli
+from python.model.reranking_model import NLI_roberta_large_mnli, DialogRPT
 
 
 class GeneratorAgent(TransformerGeneratorAgent):
@@ -42,6 +42,7 @@ class GeneratorAgent(TransformerGeneratorAgent):
         self._response_seperator = opt.get('response_sep', '')
         self._response_num = opt.get('response_num', 1)
         self._deactivate_nli_reranking = opt.get('deactivate_nli_reranking', False)
+        self._deactivate_dialogRPT_reranking = opt.get('deactivate_dialogRPT_reranking', False)
         if self._response_num > 1 and len(self._response_seperator) == 0:
             raise ValueError(
                 'Response seperator empty while response number over 1.')
@@ -52,6 +53,8 @@ class GeneratorAgent(TransformerGeneratorAgent):
         self._reranking_models = {}
         if not self._deactivate_nli_reranking:
             self._reranking_models['nli'] = NLI_roberta_large_mnli()
+        if not self._deactivate_dialogRPT_reranking:
+            self._reranking_models['dialogRPT_depth'] = DialogRPT()
 
     def build_dictionary(self):
         """
@@ -327,20 +330,18 @@ class GeneratorAgent(TransformerGeneratorAgent):
                           batch: Batch,
                           n_best_beam_preds_scores: tp.List[tp.List[tp.Tuple[torch.Tensor, torch.Tensor]]]
                           ) -> tp.List[tp.List[tp.Tuple[torch.Tensor, torch.Tensor]]]:
-        # macheng TODO: need several optimization here,
-        # (1) _rerank_beams have been called twice, in eval_step and _generate respectively
-        # (2) unnecessarily tokenize back and forth
         assert len(n_best_beam_preds_scores) == 1
         reranked_preds_scores = [[(pred, score / len(pred)) for pred, score in n_best_beam_preds_scores[0]]]
 
         dialog_history = batch['observations'][0]['text'].split("\n")
         responses_scores = [(self._v2t(token), score) for token, score in reranked_preds_scores[0]]
         if len(self._reranking_models) >= 1:
+            reranked_responses_scores = responses_scores
             for model_name, model in self._reranking_models.items():
                 print(f'scores before reranking with {model_name}:')
                 from pprint import pprint
-                pprint(responses_scores)
-                reranked_responses_scores = model.rerank(dialog_history, responses_scores)
+                pprint(reranked_responses_scores)
+                reranked_responses_scores = model.rerank(dialog_history, reranked_responses_scores)
                 print(f'after reranking with {model_name}:')
                 pprint(reranked_responses_scores)
             # convert text response back to tokens, this step could be avoided
